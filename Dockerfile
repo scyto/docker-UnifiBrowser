@@ -1,7 +1,7 @@
 # Use alpine base image
 FROM alpine
 
-# Copy the current directory contents into the container at /app
+# Copy the current directory contents into the container at /
 COPY start.sh .
 
 # Install any needed packages

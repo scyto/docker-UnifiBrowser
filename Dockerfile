@@ -7,11 +7,12 @@ COPY start.sh .
 # Install any needed packages
 
 RUN apk update \
-  && apk add php php-session php-curl composer git \
+  && apk add --no-cache php php-session php-curl composer git \
   && git clone --depth 1 https://github.com/Art-of-WiFi/UniFi-API-browser.git \
   && chmod +x start.sh \
   && cd UniFi-API-browser \
-  && composer install
+  && composer install \
+  && apk del git composer
 
 # Define environment variable
 ENV PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

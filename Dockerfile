@@ -12,7 +12,7 @@ RUN apk update \
   && chmod +x start.sh \
   && cd UniFi-API-browser \
   && composer install \
-  && apk del git composer
+  && apk del git
 
 # Define environment variable
 ENV PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

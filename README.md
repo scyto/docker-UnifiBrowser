@@ -16,5 +16,6 @@ If you find any issues please login them at the github repo
 
 ToDo
 
-* figure out multi-arch builds
+* ~~figure out multi-arch builds~~ done. :latest supports linux/amd64, linux/arm64, linux/ppc64le, linux/s390x, linux/386, linux/arm/v7, linux/arm/v6
+
 * allow defintion of the port using an ENV VAR

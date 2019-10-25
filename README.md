@@ -4,7 +4,7 @@
 
  The API Browser lets you pull raw, JSON formatted data from the API running on your controller.
 
-## Required EnvVars
+## Required Environment Variables
  To run this container you will need to define the following variables:
 
 | Environment Variable | Default                     | Explanation                                                                                                                                    |

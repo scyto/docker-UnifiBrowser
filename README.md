@@ -34,5 +34,4 @@ Unifi-API-Browser supports multiple controllers.  To use them copy the users.php
 Editing these files is beyond the scope of this readme.md but both contain good instructions
 
 ### Feedback
-If you find any issues please login them at the github repo
-
+If you find any issues please login them at the github repo https://github.com/scyto/docker-UnifiBrowser

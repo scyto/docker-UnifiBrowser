@@ -4,18 +4,34 @@
 
  The API Browser lets you pull raw, JSON formatted data from the API running on your controller.
 
- This docker container is a minimal install and can be run using the following commands:
+## Required EnvVars
+ To run this container you will need to define the following variables:
 
-`docker run --name unifiapibrowser -P scyto/unifibrowser`
-this will map the internal 8000 port to a random high TCP port, use docker container ls once the container is running to discover the host port.
+| Environment Variable | Default                     | Explanation                                                                                                                                    |
+|----------------------|-----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| USER                 | Your unifi username         | Your username on unifi console - consider creating a restricted user                                                                           |
+| PASSWORD             | Your unifi password         | clear text unifi password                                                                                                                      |
+| UNIFIURL             | https://192.168.1.1         | URL to your controller *without* the port                                                                                                      |
+| PORT                 | 8443                        | Port if you changed the port unifi is running on                                                                                               |
+| DISPLAYNAME          | My Site Name                | Arbitrary name you want to refer to this site as in API Browser                                                                                |
+| APIBROWSERUSER       | admin                       | username to secure the API Browser instance                                                                                                    |
+| APIBROWSERPASS       | SHA512 hash of the password | Generate a SHA512 of the password you want and put here, you can use a tool like https://abunchofutils.com/u/computing/sha512-hash-calculator/ |
 
-`docker run --name unifiapibrowser -p 8000:8000 scyto/unifibrowser`
-this will run the container on host port 8000/tcp.
+## Getting Running
+To get started this is the minimum number of options, be sure to append each envar with the required text (esp the SHA256):
 
-If you find any issues please login them at the github repo
+`docker run --name unifiapibrowser -p:8000:8000 -e USER= -e PASSWORD= -e UNIFIURL= -e APIBROWSERPASS=    scyto/unifibrowser`
 
-ToDo
+This will run the container on host port 8000/tcp.
 
-* ~~figure out multi-arch builds~~ done. :latest supports linux/amd64, linux/arm64, linux/ppc64le, linux/s390x, linux/386, linux/arm/v7, linux/arm/v6
+## Using Multiple Unifi Controllers
 
-* allow defintion of the port using an ENV VAR
+Unifi-API-Browser supports multiple controllers.  To use them copy the users.php and config.php into a host directory and the map them into the container with the addituional following options.
+
+`-v <YourHostPath>/config.php:/UniFi-API-browser/config/config.php` and
+`-v <YourHostPath>/config.php:/UniFi-API-browser/config/users.php`
+
+Editing these files is beyond the scope of this readme.md but both contain good instructions
+
+### Feedback
+If you find any issues please login them at the github repo https://github.com/scyto/docker-UnifiBrowser

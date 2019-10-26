@@ -1,4 +1,4 @@
-# UnifiBrowser
+# Unifi-API-Browser v2
 
  Docker for unifi browser <https://github.com/Art-of-WiFi/UniFi-API-browser>
 
@@ -26,9 +26,12 @@ This will run the container on host port 8000/tcp.
 
 ## Using Multiple Unifi Controllers
 
-Unifi-API-Browser supports multiple controllers.  To use them copy the users.php and config.php into a host directory and the map them into the container with the addituional following options.
+Unifi-API-Browser supports multiple controllers.  To use them copy the users.php and config.php into a host directory and the map them into the container with the additional following command line options:
 
-`-v <YourHostPath>/config.php:/UniFi-API-browser/config/config.php` and
+`-v <YourHostPath>/config.php:/UniFi-API-browser/config/config.php` 
+
+and
+
 `-v <YourHostPath>/config.php:/UniFi-API-browser/config/users.php`
 
 Editing these files is beyond the scope of this readme.md but both contain good instructions

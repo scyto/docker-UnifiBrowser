@@ -19,6 +19,7 @@ RUN apk update \
 # Define environment variable
 ENV PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV LANG C.UTF-8
+ENV TZ America/Los_Angeles
 ENV USER your unifi username
 ENV PASSWORD your unifi password
 ENV UNIFIURL https://192.168.1.1

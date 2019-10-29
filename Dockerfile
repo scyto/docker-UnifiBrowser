@@ -7,12 +7,12 @@ COPY /files .
 # Install any needed packages
 
 RUN apk update \
-  && apk add --no-cache php php-session php-curl composer git \
+  && apk add --no-cache php php-session php-curl php-tokenizer composer git \
   && git clone --depth 1 https://github.com/Art-of-WiFi/UniFi-API-browser.git \
+  && apk del git \
   && chmod +x start.sh \
   && cd UniFi-API-browser \
   && cd .. \
-  && apk del git \
   && mv config.php /UniFi-API-browser/config \
   && mv users.php /UniFi-API-browser/config
 

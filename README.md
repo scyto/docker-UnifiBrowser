@@ -2,6 +2,8 @@
 
  Docker for unifi browser <https://github.com/Art-of-WiFi/UniFi-API-browser>
 
+Includes support for UniFiOS on UDMP - see note on ports
+
  The API Browser lets you pull raw, JSON formatted data from the API running on your controller.
 
 ## Required Environment Variables

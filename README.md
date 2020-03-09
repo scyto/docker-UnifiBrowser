@@ -12,7 +12,7 @@
 | USER                 | Your unifi username         | Your username on unifi console - consider creating a restricted user                                                                           |
 | PASSWORD             | Your unifi password         | clear text unifi password                                                                                                                      |
 | UNIFIURL             | https://192.168.1.1         | URL to your controller *without* the port                                                                                                      |
-| PORT                 | 8443                        | Port if you changed the port unifi is running on                                                                                               |
+| PORT                 | 8443                        | Port if you changed the port unifi is running on 8443 (default env var setting) for older controllers, 443 for UniFiOS based controllers                                                                                               |
 | DISPLAYNAME          | My Site Name                | Arbitrary name you want to refer to this site as in API Browser                                                                                |
 | APIBROWSERUSER       | admin                       | username to secure the API Browser instance                                                                                                    |
 | APIBROWSERPASS       | SHA512 hash of the password | Generate a SHA512 of the password you want and put here, you can use a tool like https://abunchofutils.com/u/computing/sha512-hash-calculator/ |

@@ -1,4 +1,4 @@
-# Unifi-API-Browser v2
+# Unifi-API-Browser v2.0.15
 
  Docker for unifi browser <https://github.com/Art-of-WiFi/UniFi-API-browser>
 
@@ -13,11 +13,11 @@ Includes support for UniFiOS on UDMP - see note on ports
 |----------------------|-----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | USER                 | Your unifi username         | Your username on unifi console - consider creating a restricted user                                                                           |
 | PASSWORD             | Your unifi password         | clear text unifi password                                                                                                                      |
-| UNIFIURL             | https://192.168.1.1         | URL to your controller *without* the port                                                                                                      |
-| PORT                 | 8443                        | Port if you changed the port unifi is running on 8443 (default env var setting) for older controllers, 443 for UniFiOS based controllers                                                                                               |
+| UNIFIURL             | https://192.168.1.1         | URL to your controller *without* the port or trailing / on the URL                                                                                                      |
+| PORT                 | 443                        | Port if you changed the port unifi is running on - default env var setting 443 is now the default for UDM / UDMP for older UniFiOS based controllers change to 8443 controllers                                                                                               |
 | DISPLAYNAME          | My Site Name                | Arbitrary name you want to refer to this site as in API Browser                                                                                |
 | APIBROWSERUSER       | admin                       | username to secure the API Browser instance                                                                                                    |
-| APIBROWSERPASS       | SHA512 hash of the password | Generate a SHA512 of the password you want and put here, you can use a tool like https://abunchofutils.com/u/computing/sha512-hash-calculator/ |
+| APIBROWSERPASS       | see note | Note: Generate a SHA512 of the password you want and put here, you can use a tool like https://abunchofutils.com/u/computing/sha512-hash-calculator/ by default the password is 'admin' i.e. c7ad44cbad762a5da0a452f9e854fdc1e0e7a52a38015f23f3eab1d80b931dd472634dfac71cd34ebc35d16ab7fb8a90c81f975113d6c7538dc69dd8de9077ec|
 
 ## Getting Running
 To get started this is the minimum number of options, be sure to append each envar with the required text (esp the SHA512):
@@ -39,4 +39,4 @@ and
 Editing these files is beyond the scope of this readme.md but both contain good instructions
 
 ### Feedback
-If you find any issues please login them at the github repo https://github.com/scyto/docker-UnifiBrowser
+If you find any issues please log them at the github repo https://github.com/scyto/docker-UnifiBrowser

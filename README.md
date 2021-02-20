@@ -16,6 +16,7 @@ Includes support for UniFiOS on UDMP - see note on ports
 | UNIFIURL             | https://192.168.1.1         | URL to your controller *without* the port or trailing / on the URL                                                                                                      |
 | PORT                 | 443                        | Port if you changed the port unifi is running on - default env var setting 443 is now the default for UDM / UDMP for older UniFiOS based controllers change to 8443 controllers                                                                                               |
 | DISPLAYNAME          | My Site Name                | Arbitrary name you want to refer to this site as in API Browser                                                                                |
+| NOAPIBROWSERAUTH     | 0                           | use to disable browser auth
 | APIBROWSERUSER       | admin                       | username to secure the API Browser instance                                                                                                    |
 | APIBROWSERPASS       | see note | Note: Generate a SHA512 of the password you want and put here, you can use a tool like https://abunchofutils.com/u/computing/sha512-hash-calculator/ by default the password is 'admin' i.e. c7ad44cbad762a5da0a452f9e854fdc1e0e7a52a38015f23f3eab1d80b931dd472634dfac71cd34ebc35d16ab7fb8a90c81f975113d6c7538dc69dd8de9077ec|
 

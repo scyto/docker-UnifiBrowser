@@ -1,5 +1,5 @@
 # Use alpine base image
-FROM alpine
+FROM alpine:3.14
 
 # Copy the current directory contents into the container at /
 COPY /files .

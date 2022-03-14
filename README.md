@@ -27,6 +27,25 @@ To get started this is the minimum number of options, be sure to append each env
 
 This will run the container on host port 8000/tcp.
 
+## Using Docker Compose / Stack
+
+This is the fastest way to get running for unifios and doesn't require the use of the hash
+```
+version: '3.8'
+services:
+  unifiapibrowser:
+    ports:
+    - 8010:8000
+    environment:
+      USER: unifi console local account 
+      PASSWORD: unifi console password
+      NOAPIBROWSERAUTH: 1 # disables auth to apibrowser
+      UNIFIURL: https://192.168.1.1
+      PORT: 443
+      DISPLAYNAME: Home
+    image: scyto/unifibrowser
+ ```   
+
 ## Using Multiple Unifi Controllers
 
 Unifi-API-Browser supports multiple controllers.  To use them copy the users.php and config.php into a host directory and the map them into the container with the additional following command line options:

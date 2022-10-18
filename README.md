@@ -1,3 +1,32 @@
+
+# PCW Specific Stuff
+
+## Setup
+
+1. Install docker, git clone the repo
+2. Set the UNIFI_PASS env variable to be equal to the password for the apibrowser user for the unifi controller interface. (if the password is "bob", run `export UNIFI_PASS=bob`)
+3. Run `docker compose up`
+4. Navigate to https://apibrowser.phillycommunitywireless.org/# and log in.
+
+## Setting a login password
+
+To set a login password you have to pick your password, then hash it using sha512, then get the hexdigest of the password. In python 3:
+
+```
+import hashlib
+password = "password_text".encode()
+m = hashlib.sha512()
+m.update(password)
+
+# This will return your final value
+m.hexdigest()
+```
+
+Paste the result into the APIBROWSERPASS value in the unifiapibrowser service in docker-compose.yml
+
+
+
+
 # Unifi-API-Browser v2.0.23
 
  Docker for unifi browser <https://github.com/Art-of-WiFi/UniFi-API-browser>

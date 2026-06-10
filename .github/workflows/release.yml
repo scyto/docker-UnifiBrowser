@@ -1,16 +1,18 @@
 name: Release image
 
-# Publishes the multi-arch image to ghcr.io with immutable per-run tags and cuts
-# an immutable GitHub Release recording the digest.
+# Golden-path orchestrator. Composes the discrete phases:
+#   build  (build.yml)  -> push multi-arch by immutable tag, output digest
+#   smoke  (smoke.yml)  -> pull that exact digest and verify it runs
+#   publish (job below) -> promote the TESTED digest to :latest / :<version>
+#                          (imagetools re-tag, NO rebuild) + cut the Release
 #
-# GATE: the `smoke` job calls the read-only build.yml workflow. If the image
-# fails to boot / serve / satisfy upstream's PHP floor, `publish` never runs --
-# so publishing carries write permissions but the PR-facing build does not.
-# Mirrors the sysext release.yml (smoke job + publish job).
+# So the image is built once, the identical artifact is smoke-tested, and only
+# then promoted -- no stable tag (:latest/:<version>) or Release exists until the
+# build is verified. Mirrors the sysext release pattern (build artifact -> gate
+# -> publish), adapted to a registry artifact.
 #
-# Triggered manually (workflow_dispatch) or dispatched by check-releases.yml when
-# a new upstream version / PHP floor is detected. With blank inputs the pin is
-# read from tracked-versions.json, so a dispatch needs no inputs.
+# Triggered manually or dispatched by check-releases.yml. Blank inputs => the pin
+# is read from tracked-versions.json, so a dispatch needs none.
 
 on:
   workflow_dispatch:
@@ -26,106 +28,73 @@ on:
 
 permissions:
   contents: write   # create the GitHub Release / tag
-  packages: write   # push the image to ghcr.io
+  packages: write   # push + re-tag in ghcr
 
 concurrency:
   group: release
   cancel-in-progress: false
-
-env:
-  REGISTRY: ghcr.io
-  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
 
 defaults:
   run:
     shell: bash -euo pipefail {0}
 
 jobs:
-  # Required gate: read-only smoke build of the same pin. If it fails, publish
-  # never runs. Passing inputs through keeps the gate and the publish in lockstep
-  # on a manual override.
-  smoke:
+  build:
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ inputs.version }}
       php_version: ${{ inputs.php_version }}
 
+  smoke:
+    needs: build
+    uses: ./.github/workflows/smoke.yml
+    with:
+      image: ${{ needs.build.outputs.image }}
+      digest: ${{ needs.build.outputs.digest }}
+      version: ${{ needs.build.outputs.version }}
+
   publish:
-    needs: smoke
+    needs: [build, smoke]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Resolve version and image name
-        id: vars
-        run: |
-          VERSION="${{ inputs.version }}"
-          if [ -z "$VERSION" ]; then
-            VERSION=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['unifi_api_browser']['version'])")
-          fi
-          PHP_VERSION="${{ inputs.php_version }}"
-          if [ -z "$PHP_VERSION" ]; then
-            PHP_VERSION=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['base']['php'])")
-          fi
-          VERSION_CLEAN="${VERSION#v}"
-          # ghcr requires a lowercase path; github.repository has mixed case.
-          IMAGE="${REGISTRY}/${GITHUB_REPOSITORY,,}"
-          {
-            echo "version=${VERSION}"
-            echo "version_clean=${VERSION_CLEAN}"
-            echo "php_version=${PHP_VERSION}"
-            echo "image=${IMAGE}"
-            echo "short_sha=${GITHUB_SHA::7}"
-          } >> "$GITHUB_OUTPUT"
-          echo "Publishing upstream ${VERSION} on PHP ${PHP_VERSION} -> ${IMAGE}:${VERSION_CLEAN}-r${GITHUB_RUN_NUMBER}"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v4
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push multi-arch image
-        id: push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          # Keep the manifest list clean (no unknown/unknown provenance entries).
-          provenance: false
-          build-args: |
-            PHP_VERSION=${{ steps.vars.outputs.php_version }}
-            UNIFI_BROWSER_VERSION=${{ steps.vars.outputs.version }}
-          tags: |
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.version_clean }}-r${{ github.run_number }}
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.version_clean }}
-            ${{ steps.vars.outputs.image }}:latest
-            ${{ steps.vars.outputs.image }}:sha-${{ steps.vars.outputs.short_sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Render release notes
+      # Promote the tested digest by adding floating tags to it -- a registry
+      # metadata operation, no rebuild. The immutable <version>-r<run> + sha tags
+      # already point at this digest (pushed by build.yml).
+      - name: Promote tested digest to :latest and :<version>
         env:
-          IMAGE: ${{ steps.vars.outputs.image }}
-          VERSION: ${{ steps.vars.outputs.version }}
-          VERSION_CLEAN: ${{ steps.vars.outputs.version_clean }}
-          PHP_VERSION: ${{ steps.vars.outputs.php_version }}
-          RUN_NUMBER: ${{ github.run_number }}
-          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ${{ needs.build.outputs.image }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          VERSION_CLEAN: ${{ needs.build.outputs.version_clean }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest" \
+            --tag "${IMAGE}:${VERSION_CLEAN}" \
+            "${IMAGE}@${DIGEST}"
+          echo "Promoted ${IMAGE}@${DIGEST} -> :latest, :${VERSION_CLEAN}"
+
+      - name: Create immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ needs.build.outputs.image }}
+          VERSION: ${{ needs.build.outputs.version }}
+          VERSION_CLEAN: ${{ needs.build.outputs.version_clean }}
+          PHP_VERSION: ${{ needs.build.outputs.php_version }}
+          RUN_TAG: ${{ needs.build.outputs.run_tag }}
+          DIGEST: ${{ needs.build.outputs.digest }}
           BUILD_SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
         run: |
-          IMMUTABLE_TAG="${VERSION_CLEAN}-r${RUN_NUMBER}"
           cat > release-notes.md <<EOF
           ## UniFi API Browser container — upstream \`${VERSION}\`
 
@@ -133,13 +102,13 @@ jobs:
           | --- | --- |
           | Upstream | [Art-of-WiFi/UniFi-API-browser@${VERSION}](https://github.com/Art-of-WiFi/UniFi-API-browser/releases/tag/${VERSION}) |
           | PHP base | \`php:${PHP_VERSION}-cli-alpine\` |
-          | Immutable image | \`${IMAGE}:${IMMUTABLE_TAG}\` |
+          | Immutable image | \`${IMAGE}:${RUN_TAG}\` |
           | Digest | \`${DIGEST}\` |
           | Platforms | \`linux/amd64\`, \`linux/arm64\`, \`linux/arm/v7\` |
           | Source commit | [\`${BUILD_SHA}\`](https://github.com/${REPO}/commit/${BUILD_SHA}) |
 
-          Built and smoke-tested in CI (boots, serves HTTP 200, PHP satisfies the
-          locked runtime floor).
+          Built once, smoke-tested by digest, then promoted (boots, HTTP 200, PHP
+          satisfies the locked runtime floor).
 
           ### Pull (immutable, by digest)
           \`\`\`bash
@@ -148,7 +117,7 @@ jobs:
 
           ### Pull (this exact build)
           \`\`\`bash
-          docker pull ${IMAGE}:${IMMUTABLE_TAG}
+          docker pull ${IMAGE}:${RUN_TAG}
           \`\`\`
 
           The floating tags \`:latest\` and \`:${VERSION_CLEAN}\` also point at this build.
@@ -156,13 +125,13 @@ jobs:
           echo "=== release notes ==="
           cat release-notes.md
 
-      - name: Create immutable GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="v${{ steps.vars.outputs.version_clean }}-r${{ github.run_number }}"
-          gh release create "$TAG" \
-            --title "UniFi API Browser v${{ steps.vars.outputs.version_clean }} (r${{ github.run_number }})" \
+          # Derive the run number from RUN_TAG (not github.run_number) so the tag
+          # and title always agree, independent of reusable-workflow run-number
+          # semantics. RUN_TAG is "<version_clean>-r<N>".
+          RUN_NUM="${RUN_TAG##*-r}"
+          gh release create "v${RUN_TAG}" \
+            --target "${BUILD_SHA}" \
+            --title "UniFi API Browser v${VERSION_CLEAN} (r${RUN_NUM})" \
             --notes-file release-notes.md \
             --latest
-          echo "Created release ${TAG}"
+          echo "Created release v${RUN_TAG}"

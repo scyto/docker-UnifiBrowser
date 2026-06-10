@@ -1,0 +1,63 @@
+name: Smoke test image
+
+# Phase 2 of the release path. Pulls a published image BY DIGEST and runs the
+# shared smoke test (boots, HTTP 200, PHP satisfies upstream's real floor) --
+# so it verifies exactly the artifact build.yml pushed, not a fresh rebuild.
+#
+# Run standalone (workflow_dispatch) to re-test any published image, or via
+# workflow_call from release.yml as the gate before publishing.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        type: string
+        required: true
+      digest:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'ghcr image path, e.g. ghcr.io/scyto/docker-unifibrowser'
+        required: true
+      digest:
+        description: 'Manifest digest to test, e.g. sha256:...'
+        required: true
+      version:
+        description: 'Upstream UniFi-API-browser tag (for the PHP floor lookup), e.g. v3.0.0'
+        required: true
+
+permissions:
+  contents: read   # checkout the smoke script
+  packages: read   # pull the image from ghcr
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image by digest
+        run: docker pull "${{ inputs.image }}@${{ inputs.digest }}"
+
+      - name: Smoke test
+        run: bash .github/scripts/smoke-test.sh "${{ inputs.image }}@${{ inputs.digest }}" "${{ inputs.version }}"

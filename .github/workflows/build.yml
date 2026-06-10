@@ -1,37 +1,15 @@
-name: Build and smoke test
+name: Build image
 
-# Read-only CI gate. Builds the amd64 image and smoke-tests it (boots, serves
-# HTTP 200, PHP satisfies upstream's real runtime floor). It NEVER logs in,
-# pushes, or releases, and declares only `contents: read` -- so it is safe to
-# run against a PR-controlled Dockerfile (a malicious RUN gets only a read-only
-# token, and checkout drops it from the workspace anyway).
+# Phase 1 of the release path. Builds the multi-arch image and pushes it to ghcr
+# under an immutable per-run tag (<version>-r<run> + sha-<sha>) -- NOT the
+# floating :latest / :<version> tags, which release.yml applies only after the
+# smoke phase passes. Outputs the pushed digest so smoke.yml tests exactly this
+# artifact and release.yml promotes exactly this digest (no rebuild).
 #
-# Triggered by:
-#   * pull_request  -> red/green check on the PR
-#   * workflow_call -> release.yml runs this as a required gate before publishing
-#   * workflow_dispatch -> ad-hoc smoke test of the tracked (or overridden) pin
-#
-# Mirrors the sysext repo's build-sysext "CI smoke" workflow; publishing lives
-# in release.yml.
+# Run standalone (workflow_dispatch) to produce an image, or via workflow_call
+# from release.yml as the first phase of the golden path.
 
 on:
-  pull_request:
-    paths:
-      - 'Dockerfile'
-      - 'files/**'
-      - '.github/workflows/build.yml'
-      - '.github/tracked-versions.json'
-      - '.github/scripts/**'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Upstream UniFi-API-browser tag (blank = latest tracked)'
-        required: false
-        default: ''
-      php_version:
-        description: 'PHP major.minor (blank = tracked base.php)'
-        required: false
-        default: ''
   workflow_call:
     inputs:
       version:
@@ -42,13 +20,43 @@ on:
         type: string
         required: false
         default: ''
+    outputs:
+      image:
+        description: 'ghcr image path (no tag)'
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: 'Pushed manifest digest (sha256:...)'
+        value: ${{ jobs.build.outputs.digest }}
+      version:
+        description: 'Resolved upstream version'
+        value: ${{ jobs.build.outputs.version }}
+      version_clean:
+        description: 'Resolved upstream version without leading v'
+        value: ${{ jobs.build.outputs.version_clean }}
+      php_version:
+        description: 'Resolved PHP base version'
+        value: ${{ jobs.build.outputs.php_version }}
+      run_tag:
+        description: 'Immutable per-run tag pushed (<version>-r<run>)'
+        value: ${{ jobs.build.outputs.run_tag }}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Upstream UniFi-API-browser tag (blank = latest tracked)'
+        required: false
+        default: ''
+      php_version:
+        description: 'PHP major.minor (blank = tracked base.php)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
+  packages: write
 
-concurrency:
-  group: build-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  REGISTRY: ghcr.io
+  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
 
 defaults:
   run:
@@ -57,14 +65,19 @@ defaults:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
+    outputs:
+      image: ${{ steps.vars.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+      version: ${{ steps.vars.outputs.version }}
+      version_clean: ${{ steps.vars.outputs.version_clean }}
+      php_version: ${{ steps.vars.outputs.php_version }}
+      run_tag: ${{ steps.vars.outputs.run_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          persist-credentials: false
 
-      - name: Resolve version and PHP base
+      - name: Resolve version, PHP base and image
         id: vars
         run: |
           VERSION="${{ inputs.version }}"
@@ -75,65 +88,54 @@ jobs:
           if [ -z "$PHP_VERSION" ]; then
             PHP_VERSION=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['base']['php'])")
           fi
+          VERSION_CLEAN="${VERSION#v}"
+          # ghcr requires a lowercase path; github.repository has mixed case.
+          IMAGE="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          RUN_TAG="${VERSION_CLEAN}-r${GITHUB_RUN_NUMBER}"
           {
             echo "version=${VERSION}"
+            echo "version_clean=${VERSION_CLEAN}"
             echo "php_version=${PHP_VERSION}"
+            echo "image=${IMAGE}"
+            echo "run_tag=${RUN_TAG}"
+            echo "short_sha=${GITHUB_SHA::7}"
           } >> "$GITHUB_OUTPUT"
-          echo "Smoke-testing upstream ${VERSION} on PHP ${PHP_VERSION}"
+          echo "Building upstream ${VERSION} on PHP ${PHP_VERSION} -> ${IMAGE}:${RUN_TAG}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # amd64 only -- enough to boot and probe; no QEMU needed on an amd64 runner.
-      - name: Build amd64 image
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Push the immutable per-run tags only. The floating :latest / :<version>
+      # tags are applied by release.yml AFTER smoke passes, so nothing a user
+      # would `docker pull` by a stable name exists until the build is verified.
+      - name: Build and push (immutable tags)
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
-          load: true
-          tags: unifibrowser:smoketest
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          provenance: false
           build-args: |
             PHP_VERSION=${{ steps.vars.outputs.php_version }}
             UNIFI_BROWSER_VERSION=${{ steps.vars.outputs.version }}
+          tags: |
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.run_tag }}
+            ${{ steps.vars.outputs.image }}:sha-${{ steps.vars.outputs.short_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Smoke test the image
+      - name: Report
         run: |
-          cid=$(docker run -d -p 8000:8000 unifibrowser:smoketest)
-          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-
-          code=000
-          for _ in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/UniFi-API-browser/ || true)
-            [ "$code" = "200" ] && break
-            sleep 1
-          done
-          echo "HTTP status: ${code}"
-          if [ "$code" != "200" ]; then
-            echo "::error title=smoke-test::app did not return HTTP 200"
-            docker logs "$cid" || true
-            exit 1
-          fi
-
-          # Catches a fatal PHP/Twig error that still returns 200 with an error body.
-          if ! curl -s http://localhost:8000/UniFi-API-browser/ | grep -qi 'UniFi API Browser'; then
-            echo "::error title=smoke-test::login page title missing -- likely a PHP/Twig fatal"
-            docker logs "$cid" || true
-            exit 1
-          fi
-
-          # Assert PHP satisfies upstream's AUTHORITATIVE runtime floor --
-          # vendor/composer/platform_check.php, generated from the locked deps
-          # (NOT composer.json's require.php, which lags: v3.0.0 declares >=8.1
-          # but the locked deps need >=8.2, and an 8.1 image 500s on every
-          # request). Fails loudly with the exact version needed.
-          FLOOR=$(curl -fsSL "https://raw.githubusercontent.com/Art-of-WiFi/UniFi-API-browser/${{ steps.vars.outputs.version }}/vendor/composer/platform_check.php" | python3 .github/scripts/php-floor.py)
-          FLOOR_ID=$(awk -F. '{ printf "%d%02d00", $1, $2 }' <<<"$FLOOR")
-          echo "upstream PHP floor: ${FLOOR} (id ${FLOOR_ID})"
-          if ! docker exec -e FLOOR_ID="$FLOOR_ID" "$cid" php -r 'exit(PHP_VERSION_ID >= (int)getenv("FLOOR_ID") ? 0 : 1);'; then
-            echo "::error title=smoke-test::image PHP $(docker exec "$cid" php -r 'echo PHP_VERSION;') is below upstream's required ${FLOOR}. Bump base.php in .github/tracked-versions.json."
-            exit 1
-          fi
-
-          echo "smoke-test OK (PHP satisfies upstream floor ${FLOOR})"
+          echo "Pushed ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.run_tag }}"
+          echo "Digest: ${{ steps.push.outputs.digest }}"

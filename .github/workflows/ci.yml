@@ -1,0 +1,88 @@
+name: CI
+
+# Read-only PR gate. Builds the amd64 image locally and smoke-tests it (boots,
+# HTTP 200, PHP satisfies upstream's real floor). It NEVER pushes and declares
+# only `contents: read`, so it is safe against a PR-controlled Dockerfile.
+#
+# This is deliberately the ONE place build + smoke stay fused: a pull request
+# cannot push to ghcr (read-only token, by design), so there is no published
+# artifact for a separate smoke phase to pull -- it has to build locally and run
+# it in place. The decoupled build -> smoke -> publish phases (build.yml /
+# smoke.yml / release.yml) are the write-side release path.
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'files/**'
+      - '.github/workflows/ci.yml'
+      - '.github/tracked-versions.json'
+      - '.github/scripts/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Upstream UniFi-API-browser tag (blank = latest tracked)'
+        required: false
+        default: ''
+      php_version:
+        description: 'PHP major.minor (blank = tracked base.php)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Resolve version and PHP base
+        id: vars
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['unifi_api_browser']['version'])")
+          fi
+          PHP_VERSION="${{ inputs.php_version }}"
+          if [ -z "$PHP_VERSION" ]; then
+            PHP_VERSION=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['base']['php'])")
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "php_version=${PHP_VERSION}"
+          } >> "$GITHUB_OUTPUT"
+          echo "CI build of upstream ${VERSION} on PHP ${PHP_VERSION}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # amd64 only -- enough to boot and probe; no QEMU needed on an amd64 runner.
+      - name: Build amd64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: unifibrowser:ci
+          build-args: |
+            PHP_VERSION=${{ steps.vars.outputs.php_version }}
+            UNIFI_BROWSER_VERSION=${{ steps.vars.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: bash .github/scripts/smoke-test.sh unifibrowser:ci "${{ steps.vars.outputs.version }}"

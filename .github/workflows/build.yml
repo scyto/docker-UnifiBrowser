@@ -13,8 +13,11 @@ name: Build and release image
 #     collides with GitHub's immutable-release tag burn, exactly like the sysext
 #     repo's -r<run> scheme.
 #
-# Triggered manually (workflow_dispatch) or by check-releases.yml (workflow_call)
-# when a new upstream version is detected.
+# Triggered manually (workflow_dispatch), by check-releases.yml (workflow_call)
+# when a new upstream version is detected, or by a pull_request as a CI gate.
+# On a pull_request the publish steps (ghcr login / push / Release) are skipped:
+# the job only builds amd64 and smoke-tests it, so the PR gets a red/green check
+# with zero side effects -- mirrors the sysext repo's build-sysext "CI smoke".
 
 on:
   workflow_dispatch:
@@ -37,14 +40,24 @@ on:
         type: string
         required: false
         default: ''
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'files/**'
+      - '.github/workflows/build.yml'
+      - '.github/tracked-versions.json'
+      - '.github/scripts/**'
 
 permissions:
   contents: write   # create the GitHub Release / tag
   packages: write   # push the image to ghcr.io
 
+# Scope by event so a PR build and a release build never share a lane. PR
+# builds for the same ref supersede each other (cancel-in-progress); release
+# builds (dispatch / call) never cancel a publish in flight.
 concurrency:
-  group: build-release
-  cancel-in-progress: false
+  group: build-release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REGISTRY: ghcr.io
@@ -149,7 +162,9 @@ jobs:
           echo "smoke-test OK (PHP satisfies upstream floor ${FLOOR})"
 
       # --- Publish: all platforms, immutable tags, immutable release. ---
+      # Skipped entirely on pull_request: the PR only needs the smoke test above.
       - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -158,6 +173,7 @@ jobs:
 
       - name: Build and push multi-arch image
         id: push
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -177,6 +193,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Render release notes
+        if: github.event_name != 'pull_request'
         env:
           IMAGE: ${{ steps.vars.outputs.image }}
           VERSION: ${{ steps.vars.outputs.version }}
@@ -218,6 +235,7 @@ jobs:
           cat release-notes.md
 
       - name: Create immutable GitHub Release
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

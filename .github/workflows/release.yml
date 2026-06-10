@@ -1,18 +1,16 @@
 name: Release image
 
-# Golden-path orchestrator. Composes the discrete phases:
-#   build  (build.yml)  -> push multi-arch by immutable tag, output digest
-#   smoke  (smoke.yml)  -> pull that exact digest and verify it runs
-#   publish (job below) -> promote the TESTED digest to :latest / :<version>
-#                          (imagetools re-tag, NO rebuild) + cut the Release
+# Golden-path orchestrator and the ONLY workflow that writes. Reuses the same
+# phases as ci.yml, then publishes:
+#   build  (build.yml)  -> multi-arch OCI archive artifact (write-free)
+#   smoke  (smoke.yml)  -> test that artifact's amd64 slice  (write-free)
+#   publish (job below) -> skopeo-push the SAME archive bytes to ghcr under all
+#                          tags + cut the immutable GitHub Release
 #
-# So the image is built once, the identical artifact is smoke-tested, and only
-# then promoted -- no stable tag (:latest/:<version>) or Release exists until the
-# build is verified. Mirrors the sysext release pattern (build artifact -> gate
-# -> publish), adapted to a registry artifact.
-#
-# Triggered manually or dispatched by check-releases.yml. Blank inputs => the pin
-# is read from tracked-versions.json, so a dispatch needs none.
+# So the image is built once (as a portable file, like a sysext .raw), the
+# identical artifact is smoke-tested, and only then pushed -- nothing reaches the
+# registry until smoke passes. Triggered manually or dispatched by
+# check-releases.yml; blank inputs read the pin from tracked-versions.json.
 
 on:
   workflow_dispatch:
@@ -28,7 +26,8 @@ on:
 
 permissions:
   contents: write   # create the GitHub Release / tag
-  packages: write   # push + re-tag in ghcr
+  packages: write   # push to ghcr
+  actions: read     # read the build artifact
 
 concurrency:
   group: release
@@ -49,39 +48,39 @@ jobs:
     needs: build
     uses: ./.github/workflows/smoke.yml
     with:
-      image: ${{ needs.build.outputs.image }}
-      digest: ${{ needs.build.outputs.digest }}
       version: ${{ needs.build.outputs.version }}
 
   publish:
     needs: [build, smoke]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Download tested image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-oci
 
       - name: Log in to ghcr.io
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      # Promote the tested digest by adding floating tags to it -- a registry
-      # metadata operation, no rebuild. The immutable <version>-r<run> + sha tags
-      # already point at this digest (pushed by build.yml).
-      - name: Promote tested digest to :latest and :<version>
+      # Push the EXACT bytes we smoke-tested. The immutable per-run tag and the
+      # floating :latest / :<version> tags all point at the same archive, so they
+      # share one digest. --all preserves the full multi-arch manifest list.
+      - name: Push tested archive to all tags
+        id: push
         env:
           IMAGE: ${{ needs.build.outputs.image }}
-          DIGEST: ${{ needs.build.outputs.digest }}
+          RUN_TAG: ${{ needs.build.outputs.run_tag }}
           VERSION_CLEAN: ${{ needs.build.outputs.version_clean }}
         run: |
-          docker buildx imagetools create \
-            --tag "${IMAGE}:latest" \
-            --tag "${IMAGE}:${VERSION_CLEAN}" \
-            "${IMAGE}@${DIGEST}"
-          echo "Promoted ${IMAGE}@${DIGEST} -> :latest, :${VERSION_CLEAN}"
+          SHORT="${GITHUB_SHA::7}"
+          for tag in "${RUN_TAG}" latest "${VERSION_CLEAN}" "sha-${SHORT}"; do
+            skopeo copy --all "oci-archive:image.oci.tar" "docker://${IMAGE}:${tag}"
+            echo "pushed ${IMAGE}:${tag}"
+          done
+          DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${RUN_TAG}")
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Published digest ${DIGEST}"
 
       - name: Create immutable GitHub Release
         env:
@@ -91,7 +90,7 @@ jobs:
           VERSION_CLEAN: ${{ needs.build.outputs.version_clean }}
           PHP_VERSION: ${{ needs.build.outputs.php_version }}
           RUN_TAG: ${{ needs.build.outputs.run_tag }}
-          DIGEST: ${{ needs.build.outputs.digest }}
+          DIGEST: ${{ steps.push.outputs.digest }}
           BUILD_SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
         run: |
@@ -107,8 +106,8 @@ jobs:
           | Platforms | \`linux/amd64\`, \`linux/arm64\`, \`linux/arm/v7\` |
           | Source commit | [\`${BUILD_SHA}\`](https://github.com/${REPO}/commit/${BUILD_SHA}) |
 
-          Built once, smoke-tested by digest, then promoted (boots, HTTP 200, PHP
-          satisfies the locked runtime floor).
+          Built once to a portable OCI archive, smoke-tested, then pushed (boots,
+          HTTP 200, PHP satisfies the locked runtime floor).
 
           ### Pull (immutable, by digest)
           \`\`\`bash
@@ -125,12 +124,8 @@ jobs:
           echo "=== release notes ==="
           cat release-notes.md
 
-          # Derive the run number from RUN_TAG (not github.run_number) so the tag
-          # and title always agree, independent of reusable-workflow run-number
-          # semantics. RUN_TAG is "<version_clean>-r<N>".
+          # --repo because this job has no checkout (gh can't infer the repo).
           RUN_NUM="${RUN_TAG##*-r}"
-          # --repo is required: this job has no checkout, so gh can't infer the
-          # repo from a git remote (it would fail with "not a git repository").
           gh release create "v${RUN_TAG}" \
             --repo "${REPO}" \
             --target "${BUILD_SHA}" \

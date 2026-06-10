@@ -1,9 +1,9 @@
 {
   "unifi_api_browser": {
     "repo": "Art-of-WiFi/UniFi-API-browser",
-    "version": "v2.0.0"
+    "version": "v3.0.0"
   },
   "base": {
-    "php": "7.2"
+    "php": "8.2"
   }
 }

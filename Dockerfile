@@ -41,6 +41,12 @@ ENV UNIFIURL="https://192.168.1.1"
 ENV PORT="443"
 ENV NOAPIBROWSERAUTH="0"
 ENV DISPLAYNAME="My Site Name"
+# Official UniFi Network Application API (API key auth). Leave APIKEY empty to use
+# the classic USER/PASSWORD controller above; set APIKEY to switch to the official
+# API. VERIFYSSL=true enforces TLS verification (default false for self-signed
+# UDM/UDMP certs).
+ENV APIKEY=""
+ENV VERIFYSSL="false"
 ENV APIBROWSERUSER="admin"
 
 # this sets password for APIBROWSERUSER to admin - please change when you do this

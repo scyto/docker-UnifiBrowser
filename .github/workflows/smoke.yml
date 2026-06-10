@@ -50,13 +50,13 @@ jobs:
       # dispatched standalone against a prior build run.
       - name: Download image artifact (same run)
         if: inputs.run_id == ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: image-oci
 
       - name: Download image artifact (from build run)
         if: inputs.run_id != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: image-oci
           run-id: ${{ inputs.run_id }}

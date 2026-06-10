@@ -129,7 +129,10 @@ jobs:
           # and title always agree, independent of reusable-workflow run-number
           # semantics. RUN_TAG is "<version_clean>-r<N>".
           RUN_NUM="${RUN_TAG##*-r}"
+          # --repo is required: this job has no checkout, so gh can't infer the
+          # repo from a git remote (it would fail with "not a git repository").
           gh release create "v${RUN_TAG}" \
+            --repo "${REPO}" \
             --target "${BUILD_SHA}" \
             --title "UniFi API Browser v${VERSION_CLEAN} (r${RUN_NUM})" \
             --notes-file release-notes.md \

@@ -1,0 +1,125 @@
+name: Check for new upstream release
+
+# Daily check of Art-of-WiFi/UniFi-API-browser against .github/tracked-versions.json.
+# Two independent things can move the pin:
+#   1. A newer upstream release -> bump unifi_api_browser.version.
+#   2. Upstream raising its composer.json `require.php` floor ABOVE the pinned
+#      base.php -> raise base.php to that floor (the official php:<ver>-alpine
+#      image guarantees the tag exists). base.php only ever moves UP, so a lower
+#      upstream floor never downgrades it.
+# If either moved, commit the new pin and call build.yml to build + release.
+#
+# It deliberately does NOT watch Alpine or PHP release feeds, so a plain base
+# patch (alpine 3.20->3.21, php 8.3.15->8.3.20) never triggers a rebuild.
+#
+# build.yml is called as a reusable workflow in the same run with the resolved
+# version + php as inputs, so no PAT/App token is needed (unlike the sysext repo).
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: check-releases
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      version: ${{ steps.check.outputs.version }}
+      php_version: ${{ steps.check.outputs.php_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve upstream version and PHP floor
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['unifi_api_browser']['repo'])")
+          CUR_VERSION=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['unifi_api_browser']['version'])")
+          CUR_PHP=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['base']['php'])")
+
+          # /releases/latest excludes drafts and prereleases.
+          LATEST=$(gh api "repos/${REPO}/releases/latest" -q .tag_name)
+          echo "tracked: version=${CUR_VERSION} php=${CUR_PHP}; upstream latest=${LATEST}"
+
+          # Version we'd build: upstream latest if it is strictly newer, else stay.
+          NEW_VERSION="$CUR_VERSION"
+          if [ -n "$LATEST" ] && [ "$LATEST" != "$CUR_VERSION" ]; then
+            HIGHER=$(printf '%s\n%s\n' "${CUR_VERSION#v}" "${LATEST#v}" | sort -V | tail -1)
+            if [ "$HIGHER" = "${LATEST#v}" ]; then
+              NEW_VERSION="$LATEST"
+            else
+              echo "Upstream ${LATEST} is not newer than tracked ${CUR_VERSION}; ignoring."
+            fi
+          fi
+
+          # PHP floor declared by the version we'd build. base.php only moves up.
+          FLOOR=$(curl -fsSL "https://raw.githubusercontent.com/${REPO}/${NEW_VERSION}/composer.json" | python3 .github/scripts/php-floor.py)
+          NEW_PHP=$(printf '%s\n%s\n' "$CUR_PHP" "$FLOOR" | sort -V | tail -1)
+          echo "upstream PHP floor=${FLOOR}; resolved base.php=${NEW_PHP}"
+
+          if [ "$NEW_VERSION" = "$CUR_VERSION" ] && [ "$NEW_PHP" = "$CUR_PHP" ]; then
+            echo "Nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          python3 - "$NEW_VERSION" "$NEW_PHP" <<'PY'
+          import json, sys
+          path = '.github/tracked-versions.json'
+          d = json.load(open(path))
+          d['unifi_api_browser']['version'] = sys.argv[1]
+          d['base']['php'] = sys.argv[2]
+          with open(path, 'w') as f:
+              json.dump(d, f, indent=2)
+              f.write('\n')
+          PY
+
+          if [ "$NEW_VERSION" != "$CUR_VERSION" ] && [ "$NEW_PHP" != "$CUR_PHP" ]; then
+            MSG="Update tracked UniFi-API-browser to ${NEW_VERSION} and PHP base to ${NEW_PHP}"
+          elif [ "$NEW_VERSION" != "$CUR_VERSION" ]; then
+            MSG="Update tracked UniFi-API-browser to ${NEW_VERSION}"
+          else
+            MSG="Update tracked PHP base to ${NEW_PHP} (upstream raised its floor)"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/tracked-versions.json
+          git commit -m "$MSG"
+          if ! git push; then
+            git pull --rebase
+            git push
+          fi
+
+          {
+            echo "changed=true"
+            echo "version=${NEW_VERSION}"
+            echo "php_version=${NEW_PHP}"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice title=tracked bump::${MSG}"
+
+  build:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      php_version: ${{ needs.check.outputs.php_version }}
+    secrets: inherit

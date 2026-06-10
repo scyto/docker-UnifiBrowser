@@ -1,30 +1,39 @@
 #!/usr/bin/env python3
-"""Print the minimum PHP major.minor required by an upstream composer.json.
+"""Print the minimum PHP major.minor a UniFi-API-browser release needs to RUN.
 
-Reads composer.json on stdin and prints the floor of its `require.php`
-constraint (e.g. ">=8.1", "^8.1", ">=8.1 <9.0", "8.1.*" all -> "8.1").
+Reads vendor/composer/platform_check.php on stdin and extracts the PHP floor it
+enforces. This is the AUTHORITATIVE runtime requirement: Composer generates this
+file from the union of the root project and every locked dependency's PHP
+constraint, so it is correct even when composer.json's `require.php` lags behind.
 
-The floor is the smallest major.minor mentioned in the constraint: for a
-range like ">=8.1 <9.0" the lower bound 8.1 is the requirement; the 9.0 upper
-bound is not. Exits non-zero if no version can be parsed, so callers fail loud
-rather than silently shipping against an unknown requirement.
+This distinction is not academic -- it is exactly the bug that shipped a broken
+image: v3.0.0's composer.json declares `"php": ">=8.1"`, but its locked deps need
+PHP >= 8.2, and platform_check.php enforces that with `PHP_VERSION_ID >= 80200`.
+Running such an image on 8.1 makes every request 500. Reading composer.json gave
+8.1; reading platform_check.php gives the real answer, 8.2.
 
-Used by both check-releases.yml (to decide whether to raise the tracked PHP)
-and build.yml (to assert the built image satisfies upstream before publishing).
+The file contains a guard like:
+    if (!(PHP_VERSION_ID >= 80200)) { $issues[] = '... ">= 8.2.0" ...'; }
+We take the highest PHP_VERSION_ID asserted and print it as major.minor. If the
+integer form is absent we fall back to the human-readable '">= X.Y.0"' string.
 """
-import json
 import re
 import sys
 
-try:
-    data = json.load(sys.stdin)
-except json.JSONDecodeError as exc:
-    sys.exit(f"php-floor: could not parse composer.json: {exc}")
+text = sys.stdin.read()
 
-constraint = data.get("require", {}).get("php", "")
-versions = re.findall(r"(\d+)\.(\d+)", constraint)
-if not versions:
-    sys.exit(f"php-floor: no PHP version found in require.php: {constraint!r}")
+# Primary: the integer guard composer emits, e.g. `PHP_VERSION_ID >= 80200`.
+ids = [int(m) for m in re.findall(r"PHP_VERSION_ID\s*>=\s*(\d+)", text)]
+if ids:
+    vid = max(ids)
+    print(f"{vid // 10000}.{(vid // 100) % 100}")
+    sys.exit(0)
 
-major, minor = min((int(a), int(b)) for a, b in versions)
-print(f"{major}.{minor}")
+# Fallback: the human-readable requirement string, e.g. '">= 8.2.0"'.
+pairs = re.findall(r">=\s*(\d+)\.(\d+)", text)
+if pairs:
+    major, minor = max((int(a), int(b)) for a, b in pairs)
+    print(f"{major}.{minor}")
+    sys.exit(0)
+
+sys.exit("php-floor: no PHP version requirement found in platform_check.php")

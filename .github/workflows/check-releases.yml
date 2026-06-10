@@ -3,17 +3,19 @@ name: Check for new upstream release
 # Daily check of Art-of-WiFi/UniFi-API-browser against .github/tracked-versions.json.
 # Two independent things can move the pin:
 #   1. A newer upstream release -> bump unifi_api_browser.version.
-#   2. Upstream raising its composer.json `require.php` floor ABOVE the pinned
-#      base.php -> raise base.php to that floor (the official php:<ver>-alpine
-#      image guarantees the tag exists). base.php only ever moves UP, so a lower
-#      upstream floor never downgrades it.
-# If either moved, commit the new pin and call build.yml to build + release.
+#   2. Upstream raising its real PHP floor ABOVE the pinned base.php -> raise
+#      base.php to that floor (the official php:<ver>-alpine image guarantees the
+#      tag exists). base.php only ever moves UP, so a lower floor never downgrades
+#      it. The floor is read from vendor/composer/platform_check.php (the locked
+#      runtime requirement), NOT composer.json's require.php which lags behind.
+# If either moved, commit the new pin and DISPATCH release.yml as its own run.
 #
 # It deliberately does NOT watch Alpine or PHP release feeds, so a plain base
 # patch (alpine 3.20->3.21, php 8.3.15->8.3.20) never triggers a rebuild.
 #
-# build.yml is called as a reusable workflow in the same run with the resolved
-# version + php as inputs, so no PAT/App token is needed (unlike the sysext repo).
+# release.yml is dispatched (not called as a reusable workflow) so it appears as
+# a distinct "Release image" run. workflow_dispatch is the documented exception
+# to the GITHUB_TOKEN no-recursion rule, so no PAT/App token is needed.
 
 on:
   schedule:
@@ -21,7 +23,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # commit the updated pin
+  actions: write    # dispatch release.yml
 
 concurrency:
   group: check-releases
@@ -34,13 +37,9 @@ defaults:
 jobs:
   check:
     runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.check.outputs.changed }}
-      version: ${{ steps.check.outputs.version }}
-      php_version: ${{ steps.check.outputs.php_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve upstream version and PHP floor
         id: check
@@ -66,8 +65,10 @@ jobs:
             fi
           fi
 
-          # PHP floor declared by the version we'd build. base.php only moves up.
-          FLOOR=$(curl -fsSL "https://raw.githubusercontent.com/${REPO}/${NEW_VERSION}/composer.json" | python3 .github/scripts/php-floor.py)
+          # Real PHP floor for the version we'd build, read from the locked
+          # runtime requirement (platform_check.php), not composer.json's lagging
+          # require.php. base.php only moves up.
+          FLOOR=$(curl -fsSL "https://raw.githubusercontent.com/${REPO}/${NEW_VERSION}/vendor/composer/platform_check.php" | python3 .github/scripts/php-floor.py)
           NEW_PHP=$(printf '%s\n%s\n' "$CUR_PHP" "$FLOOR" | sort -V | tail -1)
           echo "upstream PHP floor=${FLOOR}; resolved base.php=${NEW_PHP}"
 
@@ -112,14 +113,13 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "::notice title=tracked bump::${MSG}"
 
-  build:
-    needs: check
-    if: needs.check.outputs.changed == 'true'
-    permissions:
-      contents: write
-      packages: write
-    uses: ./.github/workflows/build.yml
-    with:
-      version: ${{ needs.check.outputs.version }}
-      php_version: ${{ needs.check.outputs.php_version }}
-    secrets: inherit
+      # Dispatch release.yml as its own run. It reads the pin we just committed
+      # from tracked-versions.json, so no inputs are needed. This is a separate
+      # "Release image" run rather than a nested job.
+      - name: Dispatch release
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release.yml --ref "${GITHUB_REF_NAME}"
+          echo "Dispatched release.yml on ${GITHUB_REF_NAME} for ${{ steps.check.outputs.version }} (PHP ${{ steps.check.outputs.php_version }})"

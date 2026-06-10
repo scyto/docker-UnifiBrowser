@@ -1,40 +1,20 @@
-name: Build and release image
+name: Build and smoke test
 
-# Builds the multi-arch container image, smoke-tests it, and on success pushes
-# immutable tags to ghcr.io and cuts an immutable GitHub Release.
+# Read-only CI gate. Builds the amd64 image and smoke-tests it (boots, serves
+# HTTP 200, PHP satisfies upstream's real runtime floor). It NEVER logs in,
+# pushes, or releases, and declares only `contents: read` -- so it is safe to
+# run against a PR-controlled Dockerfile (a malicious RUN gets only a read-only
+# token, and checkout drops it from the workspace anyway).
 #
-# Adapted from the truenas-community-sysexts release pattern. Differences:
-#   * A container is fully testable in CI, so there is no prerelease /
-#     hardware-test / promote gate -- the smoke test below IS the gate. If it
-#     passes the image goes straight to Latest.
-#   * The artifact is the image in ghcr (pinned by digest), not a .raw attached
-#     to the Release. The Release records the digest + pull commands.
-#   * Every run cuts a UNIQUE release tag (v<ver>-r<run_number>) so it never
-#     collides with GitHub's immutable-release tag burn, exactly like the sysext
-#     repo's -r<run> scheme.
+# Triggered by:
+#   * pull_request  -> red/green check on the PR
+#   * workflow_call -> release.yml runs this as a required gate before publishing
+#   * workflow_dispatch -> ad-hoc smoke test of the tracked (or overridden) pin
 #
-# Triggered manually (workflow_dispatch), by check-releases.yml (which dispatches
-# this workflow as its own run when a new upstream version is detected), or by a
-# pull_request as a CI gate. On a pull_request the publish steps (ghcr login /
-# push / Release) are skipped: the job only builds amd64 and smoke-tests it, so
-# the PR gets a red/green check with zero side effects -- mirrors the sysext
-# repo's build-sysext "CI smoke".
-#
-# With blank inputs the version + PHP base are read from tracked-versions.json,
-# so a dispatch from check-releases (which commits the new pin first) needs no
-# inputs. The inputs exist only for manual one-off overrides.
+# Mirrors the sysext repo's build-sysext "CI smoke" workflow; publishing lives
+# in release.yml.
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Upstream UniFi-API-browser tag to build (blank = latest tracked in .github/tracked-versions.json)'
-        required: false
-        default: ''
-      php_version:
-        description: 'PHP major.minor for the base image (blank = tracked base.php)'
-        required: false
-        default: ''
   pull_request:
     paths:
       - 'Dockerfile'
@@ -42,21 +22,33 @@ on:
       - '.github/workflows/build.yml'
       - '.github/tracked-versions.json'
       - '.github/scripts/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Upstream UniFi-API-browser tag (blank = latest tracked)'
+        required: false
+        default: ''
+      php_version:
+        description: 'PHP major.minor (blank = tracked base.php)'
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: false
+        default: ''
+      php_version:
+        type: string
+        required: false
+        default: ''
 
 permissions:
-  contents: write   # create the GitHub Release / tag
-  packages: write   # push the image to ghcr.io
+  contents: read
 
-# Scope by event so a PR build and a release build never share a lane. PR
-# builds for the same ref supersede each other (cancel-in-progress); release
-# builds (dispatch / call) never cancel a publish in flight.
 concurrency:
-  group: build-release-${{ github.event_name }}-${{ github.ref }}
+  group: build-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  REGISTRY: ghcr.io
-  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
 
 defaults:
   run:
@@ -65,12 +57,14 @@ defaults:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Resolve version and image name
+      - name: Resolve version and PHP base
         id: vars
         run: |
           VERSION="${{ inputs.version }}"
@@ -81,27 +75,17 @@ jobs:
           if [ -z "$PHP_VERSION" ]; then
             PHP_VERSION=$(python3 -c "import json; print(json.load(open('.github/tracked-versions.json'))['base']['php'])")
           fi
-          VERSION_CLEAN="${VERSION#v}"
-          # ghcr requires a lowercase path; github.repository has mixed case.
-          IMAGE="${REGISTRY}/${GITHUB_REPOSITORY,,}"
           {
             echo "version=${VERSION}"
-            echo "version_clean=${VERSION_CLEAN}"
             echo "php_version=${PHP_VERSION}"
-            echo "image=${IMAGE}"
-            echo "short_sha=${GITHUB_SHA::7}"
           } >> "$GITHUB_OUTPUT"
-          echo "Building upstream ${VERSION} on PHP ${PHP_VERSION} -> ${IMAGE}:${VERSION_CLEAN}-r${GITHUB_RUN_NUMBER}"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+          echo "Smoke-testing upstream ${VERSION} on PHP ${PHP_VERSION}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # --- Gate: build amd64 only, load it locally, boot it and probe it. ---
-      # If this fails we never log in, never push, never cut a release.
-      - name: Build amd64 image for smoke test
+      # amd64 only -- enough to boot and probe; no QEMU needed on an amd64 runner.
+      - name: Build amd64 image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -132,22 +116,18 @@ jobs:
             exit 1
           fi
 
-          # The v3.0.0 login page renders this title; catches a fatal PHP/Twig error
-          # that still returns 200 with an error body.
+          # Catches a fatal PHP/Twig error that still returns 200 with an error body.
           if ! curl -s http://localhost:8000/UniFi-API-browser/ | grep -qi 'UniFi API Browser'; then
             echo "::error title=smoke-test::login page title missing -- likely a PHP/Twig fatal"
             docker logs "$cid" || true
             exit 1
           fi
 
-          # Assert the image's PHP satisfies upstream's AUTHORITATIVE runtime
-          # floor -- vendor/composer/platform_check.php, generated from the
-          # locked deps (NOT composer.json's require.php, which lags: v3.0.0
-          # declares >=8.1 but the locked deps need >=8.2, and an 8.1 image 500s
-          # on every request). If upstream raised the floor above the pinned
-          # base.php, this fails loudly with the exact version needed instead of
-          # shipping a broken image. check-releases.yml should have already
-          # auto-bumped base.php, so this is the safety net for a manual build.
+          # Assert PHP satisfies upstream's AUTHORITATIVE runtime floor --
+          # vendor/composer/platform_check.php, generated from the locked deps
+          # (NOT composer.json's require.php, which lags: v3.0.0 declares >=8.1
+          # but the locked deps need >=8.2, and an 8.1 image 500s on every
+          # request). Fails loudly with the exact version needed.
           FLOOR=$(curl -fsSL "https://raw.githubusercontent.com/Art-of-WiFi/UniFi-API-browser/${{ steps.vars.outputs.version }}/vendor/composer/platform_check.php" | python3 .github/scripts/php-floor.py)
           FLOOR_ID=$(awk -F. '{ printf "%d%02d00", $1, $2 }' <<<"$FLOOR")
           echo "upstream PHP floor: ${FLOOR} (id ${FLOOR_ID})"
@@ -157,88 +137,3 @@ jobs:
           fi
 
           echo "smoke-test OK (PHP satisfies upstream floor ${FLOOR})"
-
-      # --- Publish: all platforms, immutable tags, immutable release. ---
-      # Skipped entirely on pull_request: the PR only needs the smoke test above.
-      - name: Log in to ghcr.io
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push multi-arch image
-        id: push
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          # Keep the manifest list clean (no unknown/unknown provenance entries).
-          provenance: false
-          build-args: |
-            PHP_VERSION=${{ steps.vars.outputs.php_version }}
-            UNIFI_BROWSER_VERSION=${{ steps.vars.outputs.version }}
-          tags: |
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.version_clean }}-r${{ github.run_number }}
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.version_clean }}
-            ${{ steps.vars.outputs.image }}:latest
-            ${{ steps.vars.outputs.image }}:sha-${{ steps.vars.outputs.short_sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Render release notes
-        if: github.event_name != 'pull_request'
-        env:
-          IMAGE: ${{ steps.vars.outputs.image }}
-          VERSION: ${{ steps.vars.outputs.version }}
-          VERSION_CLEAN: ${{ steps.vars.outputs.version_clean }}
-          PHP_VERSION: ${{ steps.vars.outputs.php_version }}
-          RUN_NUMBER: ${{ github.run_number }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-          BUILD_SHA: ${{ github.sha }}
-          REPO: ${{ github.repository }}
-        run: |
-          IMMUTABLE_TAG="${VERSION_CLEAN}-r${RUN_NUMBER}"
-          cat > release-notes.md <<EOF
-          ## UniFi API Browser container — upstream \`${VERSION}\`
-
-          | Field | Value |
-          | --- | --- |
-          | Upstream | [Art-of-WiFi/UniFi-API-browser@${VERSION}](https://github.com/Art-of-WiFi/UniFi-API-browser/releases/tag/${VERSION}) |
-          | PHP base | \`php:${PHP_VERSION}-cli-alpine\` |
-          | Immutable image | \`${IMAGE}:${IMMUTABLE_TAG}\` |
-          | Digest | \`${DIGEST}\` |
-          | Platforms | \`linux/amd64\`, \`linux/arm64\`, \`linux/arm/v7\` |
-          | Source commit | [\`${BUILD_SHA}\`](https://github.com/${REPO}/commit/${BUILD_SHA}) |
-
-          Built and smoke-tested in CI (boots, serves HTTP 200, PHP ≥ 8.1).
-
-          ### Pull (immutable, by digest)
-          \`\`\`bash
-          docker pull ${IMAGE}@${DIGEST}
-          \`\`\`
-
-          ### Pull (this exact build)
-          \`\`\`bash
-          docker pull ${IMAGE}:${IMMUTABLE_TAG}
-          \`\`\`
-
-          The floating tags \`:latest\` and \`:${VERSION_CLEAN}\` also point at this build.
-          EOF
-          echo "=== release notes ==="
-          cat release-notes.md
-
-      - name: Create immutable GitHub Release
-        if: github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="v${{ steps.vars.outputs.version_clean }}-r${{ github.run_number }}"
-          gh release create "$TAG" \
-            --title "UniFi API Browser v${{ steps.vars.outputs.version_clean }} (r${{ github.run_number }})" \
-            --notes-file release-notes.md \
-            --latest
-          echo "Created release ${TAG}"

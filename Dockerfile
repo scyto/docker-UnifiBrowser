@@ -15,7 +15,10 @@ FROM php:${PHP_VERSION}-cli-alpine
 # automatically). See https://github.com/Art-of-WiFi/UniFi-API-browser/releases
 ARG UNIFI_BROWSER_VERSION=v3.0.0
 
-WORKDIR /app
+# Keep the app at /UniFi-API-browser (not under a WORKDIR), so the config dir
+# stays at /UniFi-API-browser/config -- the bind-mount path the README documents
+# for multi-controller setups. Moving it would silently ignore users' mounts.
+WORKDIR /
 
 # start.sh, config.php and users.php
 COPY files/ ./

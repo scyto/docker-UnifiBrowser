@@ -8,14 +8,14 @@ name: Check for new upstream release
 #      tag exists). base.php only ever moves UP, so a lower floor never downgrades
 #      it. The floor is read from vendor/composer/platform_check.php (the locked
 #      runtime requirement), NOT composer.json's require.php which lags behind.
-# If either moved, commit the new pin and DISPATCH build.yml as its own run.
+# If either moved, commit the new pin and DISPATCH release.yml as its own run.
 #
 # It deliberately does NOT watch Alpine or PHP release feeds, so a plain base
 # patch (alpine 3.20->3.21, php 8.3.15->8.3.20) never triggers a rebuild.
 #
-# build.yml is dispatched (not called as a reusable workflow) so it appears as a
-# distinct "Build and release image" run. workflow_dispatch is the documented
-# exception to the GITHUB_TOKEN no-recursion rule, so no PAT/App token is needed.
+# release.yml is dispatched (not called as a reusable workflow) so it appears as
+# a distinct "Release image" run. workflow_dispatch is the documented exception
+# to the GITHUB_TOKEN no-recursion rule, so no PAT/App token is needed.
 
 on:
   schedule:
@@ -113,13 +113,13 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "::notice title=tracked bump::${MSG}"
 
-      # Dispatch build.yml as its own run. It reads the pin we just committed
+      # Dispatch release.yml as its own run. It reads the pin we just committed
       # from tracked-versions.json, so no inputs are needed. This is a separate
-      # "Build and release image" run rather than a nested job.
-      - name: Dispatch build
+      # "Release image" run rather than a nested job.
+      - name: Dispatch release
         if: steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run build.yml --ref "${GITHUB_REF_NAME}"
-          echo "Dispatched build.yml on ${GITHUB_REF_NAME} for ${{ steps.check.outputs.version }} (PHP ${{ steps.check.outputs.php_version }})"
+          gh workflow run release.yml --ref "${GITHUB_REF_NAME}"
+          echo "Dispatched release.yml on ${GITHUB_REF_NAME} for ${{ steps.check.outputs.version }} (PHP ${{ steps.check.outputs.php_version }})"

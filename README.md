@@ -23,7 +23,7 @@ Includes support for UniFiOS on UDMP - see note on ports
 ## Getting Running
 To get started this is the minimum number of options, be sure to append each envar with the required text (esp the SHA512):
 
-`docker run --name unifiapibrowser -p:8000:8000 -e USER= -e PASSWORD= -e UNIFIURL= -e APIBROWSERPASS=    scyto/unifibrowser`
+`docker run --name unifiapibrowser -p:8000:8000 -e USER= -e PASSWORD= -e UNIFIURL= -e APIBROWSERPASS=    ghcr.io/scyto/docker-unifibrowser`
 
 This will run the container on host port 8000/tcp.
 
@@ -43,7 +43,7 @@ services:
       UNIFIURL: https://192.168.1.1
       PORT: 443
       DISPLAYNAME: Home
-    image: scyto/unifibrowser
+    image: ghcr.io/scyto/docker-unifibrowser
  ```   
 
 ## Using Multiple Unifi Controllers

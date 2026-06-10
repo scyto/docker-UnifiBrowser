@@ -24,7 +24,7 @@ on:
 
 permissions:
   contents: write   # commit the updated pin
-  actions: write    # dispatch build.yml
+  actions: write    # dispatch release.yml
 
 concurrency:
   group: check-releases
@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve upstream version and PHP floor
         id: check

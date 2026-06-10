@@ -22,20 +22,44 @@
  *
  * If a controller configuration is incomplete, an error will the thrown upon selection
  */
-$controllers = [
-    [
-        'user'     => getenv('USER'), // the user name for access to the Unifi Controller
-        'password' => getenv('PASSWORD'), // the password for access to the Unifi Controller
-        'url'      => getenv('UNIFIURL') . ":" . getenv('PORT'), // full url to the Unifi Controller, eg. 'https://22.22.11.11:8443'
-        'name'     => getenv('DISPLAYNAME') // name for this controller which will be used in the dropdown menu
-    ],
-#    [
-#        'user'     => 'demo2', // the user name for access to the UniFi Controller
-#        'password' => 'demo2', // the password for access to the UniFi Controller
-#        'url'      => 'https://demo.ui.com:443', // full url to the UniFi Controller, eg. 'https://22.22.11.11:8443'
-#        'name'     => 'demo2.ubnt.com'  // name for this controller which will be used in the dropdown menu
-#    ],
-];
+/**
+ * Controller selection (one mode at a time)
+ * =========================================
+ * This image configures ONE controller from environment variables in EITHER:
+ *   - Official UniFi Network Application API (API key auth) -- selected by
+ *     setting APIKEY to a non-empty value.
+ *   - Classic controller (username/password) -- the default, used whenever
+ *     APIKEY is unset/empty. Existing deployments are unaffected.
+ * The two modes are mutually exclusive: provide credentials for one or the other.
+ */
+if (getenv('APIKEY') !== false && getenv('APIKEY') !== '') {
+    // Official UniFi Network Application API (type 'official', API key auth)
+    $controllers = [
+        [
+            'type'       => 'official', // use the official API client
+            'api_key'    => getenv('APIKEY'), // API key generated in the UniFi Network Application
+            'url'        => getenv('UNIFIURL') . ":" . getenv('PORT'), // full url to the controller, eg. 'https://192.168.1.1:443'
+            'name'       => getenv('DISPLAYNAME'), // name for this controller which will be used in the dropdown menu
+            'verify_ssl' => filter_var(getenv('VERIFYSSL'), FILTER_VALIDATE_BOOLEAN), // VERIFYSSL=true enforces TLS verification; default false suits self-signed UDM/UDMP certs
+        ],
+    ];
+} else {
+    // Classic controller (username/password) -- default, backward compatible
+    $controllers = [
+        [
+            'user'     => getenv('USER'), // the user name for access to the Unifi Controller
+            'password' => getenv('PASSWORD'), // the password for access to the Unifi Controller
+            'url'      => getenv('UNIFIURL') . ":" . getenv('PORT'), // full url to the Unifi Controller, eg. 'https://22.22.11.11:8443'
+            'name'     => getenv('DISPLAYNAME'), // name for this controller which will be used in the dropdown menu
+        ],
+#        [
+#            'user'     => 'demo2', // add more controllers by editing this file directly
+#            'password' => 'demo2',
+#            'url'      => 'https://demo.ui.com:443',
+#            'name'     => 'demo2.ubnt.com'
+#        ],
+    ];
+}
 
 /**
  * Optionally change the default values for options below

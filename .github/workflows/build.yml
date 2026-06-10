@@ -1,13 +1,14 @@
 name: Build image
 
-# Phase 1 of the release path. Builds the multi-arch image and pushes it to ghcr
-# under an immutable per-run tag (<version>-r<run> + sha-<sha>) -- NOT the
-# floating :latest / :<version> tags, which release.yml applies only after the
-# smoke phase passes. Outputs the pushed digest so smoke.yml tests exactly this
-# artifact and release.yml promotes exactly this digest (no rebuild).
+# Phase 1 — write-free. Builds the multi-arch image to a local OCI-archive FILE
+# (image.oci.tar) and uploads it as a GitHub Actions artifact. It pushes NOTHING
+# and holds NO registry credentials (contents: read), so it is safe to run on a
+# PR-controlled Dockerfile and safe to reuse anywhere -- exactly like a sysext
+# build that produces a .raw file. smoke.yml tests that artifact; release.yml is
+# the only thing that ever pushes it.
 #
-# Run standalone (workflow_dispatch) to produce an image, or via workflow_call
-# from release.yml as the first phase of the golden path.
+# Reused by ci.yml (PR gate) and release.yml via workflow_call; runnable on its
+# own via workflow_dispatch.
 
 on:
   workflow_call:
@@ -21,23 +22,15 @@ on:
         required: false
         default: ''
     outputs:
-      image:
-        description: 'ghcr image path (no tag)'
-        value: ${{ jobs.build.outputs.image }}
-      digest:
-        description: 'Pushed manifest digest (sha256:...)'
-        value: ${{ jobs.build.outputs.digest }}
       version:
-        description: 'Resolved upstream version'
         value: ${{ jobs.build.outputs.version }}
       version_clean:
-        description: 'Resolved upstream version without leading v'
         value: ${{ jobs.build.outputs.version_clean }}
       php_version:
-        description: 'Resolved PHP base version'
         value: ${{ jobs.build.outputs.php_version }}
+      image:
+        value: ${{ jobs.build.outputs.image }}
       run_tag:
-        description: 'Immutable per-run tag pushed (<version>-r<run>)'
         value: ${{ jobs.build.outputs.run_tag }}
   workflow_dispatch:
     inputs:
@@ -52,7 +45,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io
@@ -64,18 +56,19 @@ defaults:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
-      image: ${{ steps.vars.outputs.image }}
-      digest: ${{ steps.push.outputs.digest }}
       version: ${{ steps.vars.outputs.version }}
       version_clean: ${{ steps.vars.outputs.version_clean }}
       php_version: ${{ steps.vars.outputs.php_version }}
+      image: ${{ steps.vars.outputs.image }}
       run_tag: ${{ steps.vars.outputs.run_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Resolve version, PHP base and image
         id: vars
@@ -98,9 +91,8 @@ jobs:
             echo "php_version=${PHP_VERSION}"
             echo "image=${IMAGE}"
             echo "run_tag=${RUN_TAG}"
-            echo "short_sha=${GITHUB_SHA::7}"
           } >> "$GITHUB_OUTPUT"
-          echo "Building upstream ${VERSION} on PHP ${PHP_VERSION} -> ${IMAGE}:${RUN_TAG}"
+          echo "Building upstream ${VERSION} on PHP ${PHP_VERSION} -> OCI archive tagged ${IMAGE}:${RUN_TAG}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -108,34 +100,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Log in to ghcr.io
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Push the immutable per-run tags only. The floating :latest / :<version>
-      # tags are applied by release.yml AFTER smoke passes, so nothing a user
-      # would `docker pull` by a stable name exists until the build is verified.
-      - name: Build and push (immutable tags)
-        id: push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          provenance: false
-          build-args: |
-            PHP_VERSION=${{ steps.vars.outputs.php_version }}
-            UNIFI_BROWSER_VERSION=${{ steps.vars.outputs.version }}
-          tags: |
-            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.run_tag }}
-            ${{ steps.vars.outputs.image }}:sha-${{ steps.vars.outputs.short_sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Report
+      # Multi-arch build to a portable OCI archive. No registry, no credentials.
+      # --provenance/--sbom off keeps the manifest a clean image index.
+      - name: Build multi-arch image to OCI archive
         run: |
-          echo "Pushed ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.run_tag }}"
-          echo "Digest: ${{ steps.push.outputs.digest }}"
+          docker buildx build \
+            --platform "${PLATFORMS}" \
+            --provenance=false --sbom=false \
+            --build-arg PHP_VERSION="${{ steps.vars.outputs.php_version }}" \
+            --build-arg UNIFI_BROWSER_VERSION="${{ steps.vars.outputs.version }}" \
+            --output "type=oci,dest=image.oci.tar" \
+            -t "${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.run_tag }}" \
+            .
+          ls -lh image.oci.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-oci
+          path: image.oci.tar
+          retention-days: 1
+          if-no-files-found: error

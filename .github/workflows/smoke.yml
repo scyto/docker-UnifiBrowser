@@ -1,39 +1,36 @@
 name: Smoke test image
 
-# Phase 2 of the release path. Pulls a published image BY DIGEST and runs the
-# shared smoke test (boots, HTTP 200, PHP satisfies upstream's real floor) --
-# so it verifies exactly the artifact build.yml pushed, not a fresh rebuild.
+# Phase 2 — write-free. Downloads the OCI-archive artifact produced by build.yml,
+# loads its amd64 slice into the local docker daemon, and runs the shared smoke
+# test (boots, HTTP 200, PHP satisfies upstream's real floor). No registry, no
+# credentials (contents: read) -- it tests exactly the artifact that will ship.
 #
-# Run standalone (workflow_dispatch) to re-test any published image, or via
-# workflow_call from release.yml as the gate before publishing.
+# Reused by ci.yml (PR gate) and release.yml via workflow_call (same-run
+# artifact); runnable on its own via workflow_dispatch by pointing it at the
+# build run that uploaded the artifact (run_id).
 
 on:
   workflow_call:
     inputs:
-      image:
-        type: string
-        required: true
-      digest:
-        type: string
-        required: true
       version:
         type: string
         required: true
+      run_id:
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
-      image:
-        description: 'ghcr image path, e.g. ghcr.io/scyto/docker-unifibrowser'
-        required: true
-      digest:
-        description: 'Manifest digest to test, e.g. sha256:...'
-        required: true
       version:
         description: 'Upstream UniFi-API-browser tag (for the PHP floor lookup), e.g. v3.0.0'
         required: true
+      run_id:
+        description: 'Build run id that uploaded the image-oci artifact'
+        required: true
 
 permissions:
-  contents: read   # checkout the smoke script
-  packages: read   # pull the image from ghcr
+  contents: read
+  actions: read   # read the image-oci artifact (cross-run, for standalone dispatch)
 
 defaults:
   run:
@@ -41,7 +38,7 @@ defaults:
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -49,15 +46,28 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Log in to ghcr.io
-        uses: docker/login-action@v4
+      # Same-run when called by ci.yml/release.yml (no run_id); cross-run when
+      # dispatched standalone against a prior build run.
+      - name: Download image artifact (same run)
+        if: inputs.run_id == ''
+        uses: actions/download-artifact@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          name: image-oci
 
-      - name: Pull image by digest
-        run: docker pull "${{ inputs.image }}@${{ inputs.digest }}"
+      - name: Download image artifact (from build run)
+        if: inputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: image-oci
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      # skopeo (preinstalled on ubuntu-24.04) extracts the amd64 manifest from
+      # the multi-arch archive into the docker daemon so we can run it.
+      - name: Load amd64 image from OCI archive
+        run: |
+          skopeo --override-os linux --override-arch amd64 \
+            copy oci-archive:image.oci.tar docker-daemon:unifibrowser:smoke
 
       - name: Smoke test
-        run: bash .github/scripts/smoke-test.sh "${{ inputs.image }}@${{ inputs.digest }}" "${{ inputs.version }}"
+        run: bash .github/scripts/smoke-test.sh unifibrowser:smoke "${{ inputs.version }}"

@@ -13,11 +13,16 @@ name: Build and release image
 #     collides with GitHub's immutable-release tag burn, exactly like the sysext
 #     repo's -r<run> scheme.
 #
-# Triggered manually (workflow_dispatch), by check-releases.yml (workflow_call)
-# when a new upstream version is detected, or by a pull_request as a CI gate.
-# On a pull_request the publish steps (ghcr login / push / Release) are skipped:
-# the job only builds amd64 and smoke-tests it, so the PR gets a red/green check
-# with zero side effects -- mirrors the sysext repo's build-sysext "CI smoke".
+# Triggered manually (workflow_dispatch), by check-releases.yml (which dispatches
+# this workflow as its own run when a new upstream version is detected), or by a
+# pull_request as a CI gate. On a pull_request the publish steps (ghcr login /
+# push / Release) are skipped: the job only builds amd64 and smoke-tests it, so
+# the PR gets a red/green check with zero side effects -- mirrors the sysext
+# repo's build-sysext "CI smoke".
+#
+# With blank inputs the version + PHP base are read from tracked-versions.json,
+# so a dispatch from check-releases (which commits the new pin first) needs no
+# inputs. The inputs exist only for manual one-off overrides.
 
 on:
   workflow_dispatch:
@@ -28,16 +33,6 @@ on:
         default: ''
       php_version:
         description: 'PHP major.minor for the base image (blank = tracked base.php)'
-        required: false
-        default: ''
-  workflow_call:
-    inputs:
-      version:
-        type: string
-        required: false
-        default: ''
-      php_version:
-        type: string
         required: false
         default: ''
   pull_request:
@@ -145,13 +140,15 @@ jobs:
             exit 1
           fi
 
-          # Assert the image's PHP satisfies upstream's DECLARED floor (its
-          # composer.json require.php), not a hardcoded number. If upstream
-          # raised the floor above the pinned base.php, this fails loudly with
-          # the exact version needed instead of shipping a broken image --
-          # check-releases.yml should have already auto-bumped base.php, so this
-          # is the safety net for a manual build that skipped that.
-          FLOOR=$(curl -fsSL "https://raw.githubusercontent.com/Art-of-WiFi/UniFi-API-browser/${{ steps.vars.outputs.version }}/composer.json" | python3 .github/scripts/php-floor.py)
+          # Assert the image's PHP satisfies upstream's AUTHORITATIVE runtime
+          # floor -- vendor/composer/platform_check.php, generated from the
+          # locked deps (NOT composer.json's require.php, which lags: v3.0.0
+          # declares >=8.1 but the locked deps need >=8.2, and an 8.1 image 500s
+          # on every request). If upstream raised the floor above the pinned
+          # base.php, this fails loudly with the exact version needed instead of
+          # shipping a broken image. check-releases.yml should have already
+          # auto-bumped base.php, so this is the safety net for a manual build.
+          FLOOR=$(curl -fsSL "https://raw.githubusercontent.com/Art-of-WiFi/UniFi-API-browser/${{ steps.vars.outputs.version }}/vendor/composer/platform_check.php" | python3 .github/scripts/php-floor.py)
           FLOOR_ID=$(awk -F. '{ printf "%d%02d00", $1, $2 }' <<<"$FLOOR")
           echo "upstream PHP floor: ${FLOOR} (id ${FLOOR_ID})"
           if ! docker exec -e FLOOR_ID="$FLOOR_ID" "$cid" php -r 'exit(PHP_VERSION_ID >= (int)getenv("FLOOR_ID") ? 0 : 1);'; then

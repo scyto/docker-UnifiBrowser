@@ -19,22 +19,27 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 cid=$(docker run -d -p 8000:8000 "$IMAGE")
 trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 
+# Poll until the app serves HTTP 200 AND the body contains the login-page title,
+# in the SAME response. Checking them together (rather than 200 first, then a
+# separate title curl) avoids a race against the single-threaded `php -S` server,
+# where an early request can return 200 before the body is fully rendered. A
+# genuine PHP/Twig fatal returns 200 with an error body, so the title also gates
+# that -- it just won't flake.
 code=000
-for _ in $(seq 1 20); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/UniFi-API-browser/ || true)
-  [ "$code" = "200" ] && break
+ok=false
+for _ in $(seq 1 30); do
+  resp=$(curl -s -w $'\n%{http_code}' http://localhost:8000/UniFi-API-browser/ || true)
+  code="${resp##*$'\n'}"
+  body="${resp%$'\n'*}"
+  if [ "$code" = "200" ] && grep -qi 'UniFi API Browser' <<<"$body"; then
+    ok=true
+    break
+  fi
   sleep 1
 done
 echo "HTTP status: ${code}"
-if [ "$code" != "200" ]; then
-  echo "::error title=smoke-test::app did not return HTTP 200"
-  docker logs "$cid" || true
-  exit 1
-fi
-
-# Catches a fatal PHP/Twig error that still returns 200 with an error body.
-if ! curl -s http://localhost:8000/UniFi-API-browser/ | grep -qi 'UniFi API Browser'; then
-  echo "::error title=smoke-test::login page title missing -- likely a PHP/Twig fatal"
+if [ "$ok" != "true" ]; then
+  echo "::error title=smoke-test::app never served a 200 with the expected login-page title (last status: ${code}) -- HTTP error or PHP/Twig fatal"
   docker logs "$cid" || true
   exit 1
 fi

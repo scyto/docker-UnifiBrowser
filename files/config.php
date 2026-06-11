@@ -51,14 +51,42 @@ if (getenv('APIKEY') !== false && getenv('APIKEY') !== '') {
             'url'      => getenv('UNIFIURL') . ":" . getenv('PORT'), // full url to the Unifi Controller, eg. 'https://22.22.11.11:8443'
             'name'     => getenv('DISPLAYNAME'), // name for this controller which will be used in the dropdown menu
         ],
-#        [
-#            'user'     => 'demo2', // add more controllers by editing this file directly
-#            'password' => 'demo2',
-#            'url'      => 'https://demo.ui.com:443',
-#            'name'     => 'demo2.ubnt.com'
-#        ],
     ];
 }
+
+// ---------------------------------------------------------------------------
+// Using MORE than one controller (optional)
+// ---------------------------------------------------------------------------
+// The environment variables only set up the ONE controller above. For several
+// controllers you edit this file by hand: copy it out of the container, replace
+// the whole "if (...) { ... } else { ... }" block above with a list like the
+// example below, fill in YOUR values, then bind-mount it back (see "Using
+// Multiple Unifi Controllers" in the README).
+//
+// How the brackets work (this is the part people get wrong):
+//   - the whole list is wrapped in:   $controllers = [ ... ];
+//   - each controller is ONE  [ ... ],  block inside that list
+//   - every block ends with a comma:   ],
+//   - only change the text inside the 'quotes'; leave the [ ] and , as-is
+//
+// Copy this whole example and edit it (two controllers, one of each type):
+//
+// $controllers = [
+//     [                                       // --- controller 1: API key ---
+//         'type'       => 'official',
+//         'api_key'    => 'PASTE-FIRST-API-KEY-HERE',
+//         'url'        => 'https://192.168.1.1:443',
+//         'name'       => 'Home',
+//         'verify_ssl' => false,
+//     ],                                       // <-- comma after every ] block
+//     [                                       // --- controller 2: user/pass ---
+//         'user'     => 'local-admin',
+//         'password' => 'PASSWORD-HERE',
+//         'url'      => 'https://192.168.1.2:443',
+//         'name'     => 'Office',
+//     ],
+// ];
+// ---------------------------------------------------------------------------
 
 /**
  * Optionally change the default values for options below

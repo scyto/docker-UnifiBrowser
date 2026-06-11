@@ -67,7 +67,7 @@ Set `APIKEY` (and omit `USER`/`PASSWORD`) to use the official UniFi Network Appl
 services:
   unifiapibrowser:
     ports:
-    - 8010:8000
+    - 8000:8000
     environment:
       APIKEY: your-unifi-network-application-api-key
       VERIFYSSL: "false"   # set true only if your controller has a trusted cert

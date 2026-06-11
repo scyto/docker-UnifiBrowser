@@ -88,5 +88,20 @@ and
 
 Editing these files is beyond the scope of this readme.md but both contain good instructions
 
+## Troubleshooting
+
+### Login fails with HTTP 403 / "UniFi controller login failure, please check the URL and credentials"
+
+In **classic** (username / password) mode this means the controller rejected the login — it is not a container problem. Check, in order:
+
+- **Double-check the username and password.** A wrong username throws this exact 403.
+- Use a **local** UniFi admin account, **not** your Ubiquiti cloud / SSO (email) login — the private login API cannot complete a cloud sign-in.
+- The account must **not** have MFA / 2FA. Local-only accounts don't by default; create one under **Settings → Admins** with **"Restrict to Local Access Only"** ticked and Full Management for UniFi Network.
+- `UNIFIURL` is the controller address with **no trailing slash**; `PORT=443` on a UDM / UDMP / Cloud Gateway (`8443` is only for a legacy self-hosted controller).
+
+(Confirmed working with a local account on UniFi OS 10.x.)
+
+If you'd rather not manage a local account, switch to **API-key mode** — see the *Official API (API key)* section above. In that mode set `VERIFYSSL=false` for a controller using the default self-signed certificate.
+
 ### Feedback
 If you find any issues please log them at the github repo https://github.com/scyto/docker-UnifiBrowser

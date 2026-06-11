@@ -133,3 +133,41 @@ jobs:
             --notes-file release-notes.md \
             --latest
           echo "Created release v${RUN_TAG}"
+
+  # Keep the README's "# Unifi-API-Browser vX.Y.Z" title in sync with the
+  # released upstream version. Runs only after a successful publish and commits
+  # to the default branch only when the version actually changed (no-op on a
+  # re-release of the same version).
+  sync-readme:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Update README version if it differs
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          file=README.md
+          current=$(sed -nE '1s/^#[[:space:]]*Unifi-API-Browser[[:space:]]+([^[:space:]]+).*/\1/Ip' "$file")
+          if [ -z "$current" ]; then
+            echo "::warning title=readme-version::could not find the version on README.md line 1; skipping"
+            exit 0
+          fi
+          if [ "$current" = "$VERSION" ]; then
+            echo "README already at ${VERSION}; nothing to do"
+            exit 0
+          fi
+          sed -i -E "1s|^(#[[:space:]]*Unifi-API-Browser[[:space:]]+)[^[:space:]]+|\1${VERSION}|I" "$file"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$file"
+          git commit -m "Update README version to ${VERSION}"
+          if ! git push; then
+            git pull --rebase --autostash
+            git push
+          fi
+          echo "README version ${current} -> ${VERSION}"

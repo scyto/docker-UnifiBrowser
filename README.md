@@ -78,15 +78,38 @@ services:
 
 ## Using Multiple Unifi Controllers
 
-Unifi-API-Browser supports multiple controllers.  To use them copy the users.php and config.php into a host directory and the map them into the container with the additional following command line options:
+The environment variables configure a **single** controller. To use more than one you edit `config.php` by hand and mount your edited copy into the container.
 
-`-v <YourHostPath>/config.php:/UniFi-API-browser/config/config.php` 
+**1. Get a copy of the shipped `config.php` to start from:**
+```
+docker cp unifiapibrowser:/UniFi-API-browser/config/config.php ./config.php
+```
 
-and
+**2. In your copy, replace the whole `if (...) { ... } else { ... }` controller block with a plain list** — one block per controller. Example with two controllers, one of each type:
+```php
+$controllers = [
+    [                                   // --- controller 1: API key ---
+        'type'       => 'official',
+        'api_key'    => 'PASTE-FIRST-API-KEY-HERE',
+        'url'        => 'https://192.168.1.1:443',
+        'name'       => 'Home',
+        'verify_ssl' => false,
+    ],                                  // <-- comma after every ] block
+    [                                   // --- controller 2: user/password ---
+        'user'     => 'local-admin',
+        'password' => 'PASSWORD-HERE',
+        'url'      => 'https://192.168.1.2:443',
+        'name'     => 'Office',
+    ],
+];
+```
+The brackets that trip people up: the whole list is wrapped in `$controllers = [ ... ];`, each controller is one `[ ... ],` block inside it, and **every block ends with a comma** (`],`). Only change the text inside the `'quotes'`.
 
-`-v <YourHostPath>/config.php:/UniFi-API-browser/config/users.php`
-
-Editing these files is beyond the scope of this readme.md but both contain good instructions
+**3. Mount your edited file back over the container's copy:**
+```
+-v <YourHostPath>/config.php:/UniFi-API-browser/config/config.php
+```
+When you mount your own `config.php`, the controller environment variables (`USER`/`PASSWORD`/`APIKEY`/`UNIFIURL`/…) are ignored — your file is the full controller configuration. (Optionally mount a hand-edited `users.php` the same way to `/UniFi-API-browser/config/users.php` if you want to manage the API Browser login accounts directly instead of via `APIBROWSERUSER`/`APIBROWSERPASS`.)
 
 ## Troubleshooting
 

@@ -96,6 +96,11 @@ jobs:
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
+        with:
+          # Don't cache the binfmt image: concurrent runs race on the same cache
+          # key and log a scary (harmless) "Unable to reserve cache" warning. The
+          # binfmt image is tiny, so re-pulling it each run is cheaper than the noise.
+          cache-image: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

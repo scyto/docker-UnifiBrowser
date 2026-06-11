@@ -146,6 +146,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # Always update the DEFAULT branch's README, regardless of the ref this
+          # release was dispatched on. A bare checkout would follow the dispatch
+          # ref and commit to a maintenance branch (or fail on a tag's detached
+          # HEAD) after the image already published.
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Update README version if it differs
         env:

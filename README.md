@@ -1,4 +1,4 @@
-# Unifi-API-Browser v3.0.0
+# Unifi-API-Browser v3.1.0
 
  Docker for unifi browser <https://github.com/Art-of-WiFi/UniFi-API-browser>
 
